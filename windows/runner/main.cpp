@@ -9,6 +9,7 @@
 #include <string>
 
 #include "flutter_window.h"
+#include "render_engine.h"
 #include "utils.h"
 
 namespace {
@@ -112,11 +113,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   EnsureStartMenuAumidShortcut();
 
   flutter::DartProject project(L"data");
-  // TEMP EXPERIMENT (lyric scroll jank): force the legacy Skia backend.
-  // Windows defaults to Impeller since Flutter 3.47; per-glyph text work on
-  // Impeller-on-Windows is a known weak spot for full-frame lyric repaints.
-  // Delete the next line to restore the default engine.
+  // 播放页歌词是整屏重绘，Impeller-on-Windows 在这个场景会把光栅线程压满
+  // （实测播放时 GPU 70%+、窗口缩小即恢复流畅、CPU 仍有富余）。
+  // 引擎开关与「关于」页显示的引擎名同源，都由 render_engine.h 决定。
+#if !MD3MUSIC_USE_IMPELLER
   project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
+#endif
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

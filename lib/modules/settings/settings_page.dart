@@ -5020,13 +5020,17 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 从原生侧读取当前构建实际生效的渲染引擎（'skia' | 'impeller'）。
+  ///
+  /// 该通道由 Android（MainActivity.kt）与 Windows runner（flutter_window.cpp）
+  /// 注册；其余平台没有实现，如实返回「未知」。**不要回落到 skia**——那会让
+  /// 「实际跑 Impeller、界面显示 Skia」这种假信息掩盖真正的图形问题。
   Future<String> _readCurrentRenderEngine() async {
     try {
       const channel = MethodChannel('com.md3music.md3music/render_engine');
       final v = await channel.invokeMethod<String>('getCurrent');
       return v == 'impeller' ? 'impeller' : 'skia';
     } catch (_) {
-      return 'skia';
+      return '未知';
     }
   }
 

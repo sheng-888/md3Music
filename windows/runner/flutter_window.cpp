@@ -18,6 +18,7 @@
 #include "audio_input_devices.h"
 #include "desktop_toast.h"
 #include "caption_snap.h"
+#include "render_engine.h"
 #include "resource.h"
 #include "window_corner.h"
 #include "window_placement.h"
@@ -865,6 +866,25 @@ bool FlutterWindow::OnCreate() {
         }
         result->NotImplemented();
       });
+  // 渲染引擎：桌面端此前没有这条通道，Dart 侧 invokeMethod 抛异常后落到
+  // 「取不到就当 skia」的兜底，于是跑 Impeller 也显示 Skia。这里返回编译期
+  // 常量，与 main.cpp 的开关读同一个宏，不可能再对不上。
+  render_engine_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "com.md3music.md3music/render_engine",
+          &flutter::StandardMethodCodec::GetInstance());
+  render_engine_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+             result) {
+        if (call.method_name() == "getCurrent") {
+          result->Success(
+              flutter::EncodableValue(std::string(MD3MUSIC_RENDER_ENGINE)));
+          return;
+        }
+        result->NotImplemented();
+      });
   // 采集线程不直接发平台通道消息（`flutter_messenger.h` 要求非平台线程的
   // 调用自己加锁，而 MethodChannel 封装没有暴露锁）；也不用
   // `FlutterEngine::PostPlatformThreadTask`——本引擎版本实测在平台线程执行
@@ -954,6 +974,7 @@ void FlutterWindow::OnDestroy() {
     spectrum_frame_pending_ = false;
     spectrum_pending_bands_.clear();
   }
+  render_engine_channel_.reset();
   spectrum_channel_.reset();
   system_audio_channel_.reset();
   audio_input_channel_.reset();
