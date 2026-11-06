@@ -5034,6 +5034,16 @@ class _SettingsPageState extends State<SettingsPage>
     }
   }
 
+  /// 渲染引擎的展示名：只认已知取值，未知如实标注。
+  ///
+  /// 不能「不是 impeller 就当 Skia」——那正是本次要修的误导源。
+  static String _renderEngineLabel(String? value) => switch (value) {
+    'impeller' => 'Impeller',
+    'skia' => 'Skia',
+    '未知' => '未知',
+    _ => '读取中…',
+  };
+
   /// 「硬件解码播放」三级子页：硬解开关、实测状态、设备解码器能力（MediaCodec）
   /// 与系统 offload 协商矩阵（折叠）。
   ///
@@ -6979,9 +6989,7 @@ class _SettingsPageState extends State<SettingsPage>
         FutureBuilder<String>(
           future: _readCurrentRenderEngine(),
           builder: (context, snap) {
-            final engine = snap.data == null
-                ? 'skia'
-                : (snap.data == 'impeller' ? 'Impeller' : 'Skia');
+            final engine = _renderEngineLabel(snap.data);
             return ListTile(
               leading: Icon(
                 Icons.high_quality_outlined,
