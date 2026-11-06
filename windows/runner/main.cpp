@@ -112,6 +112,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   EnsureStartMenuAumidShortcut();
 
   flutter::DartProject project(L"data");
+  // TEMP EXPERIMENT (lyric scroll jank): force the legacy Skia backend.
+  // Windows defaults to Impeller since Flutter 3.47; per-glyph text work on
+  // Impeller-on-Windows is a known weak spot for full-frame lyric repaints.
+  // Delete the next line to restore the default engine.
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

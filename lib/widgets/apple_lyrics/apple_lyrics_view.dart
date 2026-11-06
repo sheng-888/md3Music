@@ -2715,8 +2715,12 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           _painter!.perLineOffsetsGeneration = _perLineOffsetsGeneration;
         }
 
-        final lyricsContent = ClipRect(
-          child: CustomPaint(painter: _painter, size: Size.infinite),
+        // 单占一个绘制层：本文件此前没有任何 RepaintBoundary，逐字歌词每帧重绘
+        // 会把同层封面 / 背景一起拖进脏区。
+        final lyricsContent = RepaintBoundary(
+          child: ClipRect(
+            child: CustomPaint(painter: _painter, size: Size.infinite),
+          ),
         );
 
         // 鼠标滚轮（桌面端）：包一层 Listener 接收 PointerSignalEvent，

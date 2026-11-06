@@ -1102,11 +1102,17 @@ class _SettingsPageState extends State<SettingsPage>
     context.read<PlayerProvider>().setAudioFocusInterruptionMode(mode);
   }
 
+  /// 拖动中只改内存与全局通知器：Windows 的 shared_preferences 是整文件重写
+  /// （单键约 41~45ms），每帧落盘会让整个窗口在拖动过程中连续冻结。
+  /// 与同页「宽屏边距」滑块同节奏，松手（onChangeEnd）才写一次。
   void _setSecondaryPlayerOpacity(double value) {
     setState(() => _secondaryPlayerOpacity = value);
     kSecondaryPlayerOpacity.value = value;
+  }
+
+  void _persistSecondaryPlayerOpacity() {
     // ignore: discarded_futures
-    _settingsRepository.setSecondaryPlayerOpacity(value);
+    _settingsRepository.setSecondaryPlayerOpacity(_secondaryPlayerOpacity);
   }
 
   /// 音频焦点三选一的当前模式说明文字（跟随选中项）。
@@ -3237,6 +3243,8 @@ class _SettingsPageState extends State<SettingsPage>
                               onChanged: secondaryEnabled
                                   ? _setSecondaryPlayerOpacity
                                   : null,
+                              onChangeEnd: (_) =>
+                                  _persistSecondaryPlayerOpacity(),
                             )
                           : M3ESlider(
                               value: _secondaryPlayerOpacity,
@@ -3247,6 +3255,8 @@ class _SettingsPageState extends State<SettingsPage>
                               onChanged: secondaryEnabled
                                   ? _setSecondaryPlayerOpacity
                                   : null,
+                              onChangeEnd: (_) =>
+                                  _persistSecondaryPlayerOpacity(),
                             ),
                     ),
                     SizedBox(
