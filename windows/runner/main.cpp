@@ -6,6 +6,9 @@
 #include <propsys.h>
 #include <propkey.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 
 #include "flutter_window.h"
@@ -13,6 +16,22 @@
 #include "utils.h"
 
 namespace {
+
+// TEMPORARY DIAGNOSTIC (app-exit freeze): 与 flutter_window.cpp 的
+// ShutdownTrace 同格式、同时钟、同一个文件，用来把「消息循环退出 / COM
+// 反初始化 / CRT 退出」这三段接在窗口销毁（C9）之后。定位后删除。
+void ExitTrace(const char* tag) {
+  wchar_t dir[MAX_PATH];
+  if (::GetTempPathW(MAX_PATH, dir) == 0) return;
+  std::wstring file(dir);
+  file += L"md3music_shutdown.log";
+  std::ofstream out(file.c_str(), std::ios::app);
+  if (!out) return;
+  out << std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+             .count()
+      << ' ' << tag << '\n';
+}
 
 // AppUserModelID：Shell 用它把 SMTC 媒体会话、任务栏、通知归属到应用身份。
 // 未打包（非 MSIX）的 Win32 exe 不设置 AUMID 时，播控中心会显示
@@ -139,6 +158,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  ExitTrace("C10-loop-exited");
   ::CoUninitialize();
+  ExitTrace("C11-com-uninitialized");
+  // atexit 注册的回调在 CRT 静态析构之前执行，此时 ofstream 仍可用；
+  // 再往后（DLL 卸载，含 kugou_server.dll 的 Rust 运行时）就打不到了。
+  std::atexit([]() { ExitTrace("C12-atexit"); });
   return EXIT_SUCCESS;
 }
