@@ -1,7 +1,19 @@
 name: Build Windows (portable zip)
 
-# 触发：仅手动触发（已禁用 push 自动构建）
+# 触发：手动 + push。
+# fork 自用：推完自动构建，并把产物发到固定 tag 的 release，本地脚本直接下载，
+# 不必在网页上点 Run workflow，也不必登录下载 artifact。
+# paths 过滤避免只改文档也触发一次完整构建。
 on:
+  push:
+    branches: [rust-local-force]
+    paths:
+      - 'lib/**'
+      - 'windows/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'kugou_api_server/**'
+      - '.github/workflows/build-windows.yml'
   workflow_dispatch:
 
 permissions:
@@ -101,26 +113,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 10. 创建 CI Release（已禁用自动触发，此步骤不再执行）
-      # - name: Create CI Release
-      #   if: github.event_name == 'push'
-      #   uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-      #   with:
-      #     tag_name: win-${{ github.sha }}
-      #     name: Windows Build ${{ github.sha }}
-      #     body: |
-      #       ## Windows 便携版（CI 自动构建）
-      #
-      #       **分支:** ${{ github.ref_name }}
-      #       **提交:** ${{ github.sha }}
-      #       **时间:** ${{ github.event.head_commit.timestamp }}
-      #
-      #       ### 下载
-      #       - **md3music-windows-\*.zip** — 便携版，解压后运行 `md3music.exe` 即可。
-      #
-      #       > 此为 CI 自动构建，非正式发布版本。
-      #     prerelease: true
-      #     generate_release_notes: true
-      #     files: md3music-windows-*.zip
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 10. 归一化文件名：打包脚本产出的 zip 带版本号，固定成一个名字后
+      #     固定 release 才能稳定覆盖，不会累积历史包。
+      - name: Normalize zip name
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem md3music-windows-*.zip | Select-Object -First 1
+          if (-not $f) { throw '未找到便携包 zip' }
+          Copy-Item $f.FullName md3music-windows.zip -Force
+          Write-Host "已归一化为 md3music-windows.zip（源：$($f.Name)）"
+
+      # 11. 发布到固定 tag 的 release。
+      #     公开仓库的 release asset 允许匿名下载，本地取包脚本据此拉取；
+      #     artifact 则必须登录，无法自动化。
+      - name: Publish build to release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: latest-build
+          name: Windows 最新构建
+          body: |
+            **分支:** ${{ github.ref_name }}
+            **提交:** `${{ github.sha }}`
+            **构建:** run ${{ github.run_id }}
+
+            下载 `md3music-windows.zip`，解压后运行 `md3music.exe`。
+            非正式发布版本，仅供自用验证。
+          prerelease: true
+          files: md3music-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
