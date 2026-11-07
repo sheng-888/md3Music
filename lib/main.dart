@@ -111,10 +111,8 @@ Future<(bool, bool, bool, ThemeMode?)> runBootstrap() async {
       if (WindowsWindowControls.handleNativeCall(call)) return;
       if (call.method != 'requestQuit' || _windowsExitInProgress) return;
       _windowsExitInProgress = true;
-      windows_lifecycle.traceExitPhase('D0-requestQuit');
       try {
         await KugouApiServer.stop();
-        windows_lifecycle.traceExitPhase('D1-server-stopped');
       } catch (error, stack) {
         DiagnosticLogger.instance.e('退出时停止本地服务失败: $error\n$stack');
       } finally {
