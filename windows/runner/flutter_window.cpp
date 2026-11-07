@@ -2,6 +2,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cwchar>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -32,6 +34,8 @@ constexpr UINT kTrayMenuShow = 1;
 constexpr UINT kTrayMenuExit = 2;
 // Flutter 视图子窗口命中钩子的 subclass id（仅本窗口使用）。
 constexpr UINT_PTR kChildHitTestSubclassId = 1;
+// TEMPORARY DIAGNOSTIC: --exit-after 的定时器 id（仅本窗口使用）。
+constexpr UINT_PTR kAutoExitTimerId = 0x4D33;
 const UINT kTaskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
 
 // TEMPORARY DIAGNOSTIC (app-exit freeze). Epoch milliseconds so this log and
@@ -964,6 +968,29 @@ bool FlutterWindow::OnCreate() {
   // window is shown. It is a no-op if the first frame hasn't completed yet.
   flutter_controller_->ForceRedraw();
 
+  // TEMPORARY DIAGNOSTIC: --exit-after=SECONDS 让程序在启动 N 秒后走与托盘
+  // 菜单「退出」完全相同的路径（requestQuit -> Dart 清理 -> finishExit），
+  // 用于无人值守复现退出卡顿。定位后连同 ShutdownTrace 一并删除。
+  {
+    int argc = 0;
+    LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+    if (argv != nullptr) {
+      constexpr wchar_t kPrefix[] = L"--exit-after=";
+      constexpr int kPrefixLen = 13;
+      for (int i = 1; i < argc; ++i) {
+        if (::wcsncmp(argv[i], kPrefix, kPrefixLen) == 0) {
+          const int seconds = ::_wtoi(argv[i] + kPrefixLen);
+          if (seconds > 0) {
+            ::SetTimer(GetHandle(), kAutoExitTimerId,
+                       static_cast<UINT>(seconds) * 1000u, nullptr);
+            ShutdownTrace("C-2-auto-exit-armed");
+          }
+        }
+      }
+      ::LocalFree(argv);
+    }
+  }
+
   return true;
 }
 
@@ -1045,6 +1072,19 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_TIMER && wparam == kAutoExitTimerId) {
+    ::KillTimer(hwnd, kAutoExitTimerId);
+    if (!exit_requested_) {
+      exit_requested_ = true;
+      // 与托盘菜单选中「退出」时打同一点，两份日志可直接对比。
+      ShutdownTrace("C-1-tray-menu-exit");
+      if (tray_channel_) {
+        tray_channel_->InvokeMethod(
+            "requestQuit", std::make_unique<flutter::EncodableValue>());
+      }
+    }
+    return 0;
+  }
   if (message == kSpectrumFrameMessage) {
     HandleSpectrumFrame();
     return 0;
