@@ -23,6 +23,39 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
 // ---------------------------------------------------------------------------
+// 崩溃定位（临时）
+// ---------------------------------------------------------------------------
+
+/// 安装 panic hook。
+///
+/// release profile 是 `panic = "abort"`，任何 panic 都会直接把进程打成
+/// 0xC0000409（ucrtbase 里的 abort/fail-fast），默认不留任何痕迹——表现为
+/// 「退出时进程消失、系统卡一下、日志停在崩溃前最后一步」。hook 在 abort
+/// 之前执行，把消息和位置写到 `%TEMP%/md3music_rust_panic.log`。
+fn install_panic_hook() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        std::panic::set_hook(Box::new(|info| {
+            use std::io::Write;
+            let path = std::env::temp_dir().join("md3music_rust_panic.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "=== panic ===");
+                let _ = writeln!(f, "{info}");
+                if let Some(loc) = info.location() {
+                    let _ = writeln!(f, "at {}:{}:{}", loc.file(), loc.line(), loc.column());
+                }
+                let _ = f.flush();
+            }
+        }));
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 纯 C FFI（供 dart:ffi 直接调用）
 // ---------------------------------------------------------------------------
 
@@ -32,6 +65,8 @@ use std::os::raw::{c_char, c_int};
 /// `data_dir` 必须是指向 NUL 结尾 C 字符串的有效指针，调用者需保证生命周期覆盖本次调用。
 #[no_mangle]
 pub unsafe extern "C" fn start_server(port: c_int, data_dir: *const c_char) -> c_int {
+    install_panic_hook();
+
     // 初始化 Android 日志（仅 Android）
     #[cfg(target_os = "android")]
     {

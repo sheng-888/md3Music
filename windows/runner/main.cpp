@@ -7,7 +7,9 @@
 #include <propkey.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <string>
 
@@ -117,6 +119,28 @@ void EnsureStartMenuAumidShortcut() {
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
+  // TEMPORARY DIAGNOSTIC (app-exit crash): 退出时进程以 0xC0000409 结束
+  // （ucrtbase 里的 abort/fail-fast），默认不留任何信息。这三个 handler 会在
+  // abort 之前把原因写进日志。定位后删除。
+  std::set_terminate([]() {
+    ExitTrace("T-std-terminate");
+    if (auto eptr = std::current_exception()) {
+      try {
+        std::rethrow_exception(eptr);
+      } catch (const std::exception& e) {
+        ExitTrace(e.what());
+      } catch (...) {
+        ExitTrace("T-unknown-exception");
+      }
+    }
+    std::abort();
+  });
+  _set_invalid_parameter_handler([](const wchar_t*, const wchar_t*,
+                                    const wchar_t*, unsigned int, uintptr_t) {
+    ExitTrace("T-invalid-parameter");
+  });
+  _set_purecall_handler([]() { ExitTrace("T-purecall"); });
+
   // Attach to console when present (e.g., 'flutter run') or create a
   // new console when running with a debugger.
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
@@ -125,7 +149,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  // 必须记返回值：RPC_E_CHANGED_MODE 表示该线程已被初始化成另一种套间模型，
+  // 此时引用计数没有增加，后面再 CoUninitialize 就会减掉不属于自己的那一份，
+  // 让仍在使用的 COM 对象（SMTC / 任务栏按钮）工作在已释放的状态上。
+  const HRESULT com_init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   // AUMID 必须在创建窗口 / 初始化 SMTC 之前设置，进程级一次即可。
   ::SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);
@@ -159,7 +186,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ExitTrace("C10-loop-exited");
-  ::CoUninitialize();
+  if (SUCCEEDED(com_init)) {
+    ::CoUninitialize();
+  }
   ExitTrace("C11-com-uninitialized");
   // atexit 注册的回调在 CRT 静态析构之前执行，此时 ofstream 仍可用；
   // 再往后（DLL 卸载，含 kugou_server.dll 的 Rust 运行时）就打不到了。
