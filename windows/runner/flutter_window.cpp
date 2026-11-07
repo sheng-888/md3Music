@@ -1,6 +1,8 @@
 #include "flutter_window.h"
 
+#include <chrono>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -31,6 +33,25 @@ constexpr UINT kTrayMenuExit = 2;
 // Flutter 视图子窗口命中钩子的 subclass id（仅本窗口使用）。
 constexpr UINT_PTR kChildHitTestSubclassId = 1;
 const UINT kTaskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
+
+// TEMPORARY DIAGNOSTIC (app-exit freeze). Epoch milliseconds so this log and
+// the Dart-side log share one clock; %TEMP% is always writable, unlike the exe
+// directory when the app sits under Program Files.
+long long ShutdownNowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+void ShutdownTrace(const char* tag) {
+  wchar_t dir[MAX_PATH];
+  if (::GetTempPathW(MAX_PATH, dir) == 0) return;
+  std::wstring file(dir);
+  file += L"md3music_shutdown.log";
+  std::ofstream out(file.c_str(), std::ios::app);
+  if (!out) return;
+  out << ShutdownNowMs() << ' ' << tag << '\n';
+}
 
 std::string StringArg(const Arguments* args, const char* key) {
   if (!args) return {};
@@ -947,13 +968,16 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  ShutdownTrace("C0-enter");
   CloseDesktopToast();
+  ShutdownTrace("C1-toast-closed");
   // 先摘掉子窗口命中钩子，避免引擎销毁视图后仍回调到本对象。
   if (child_view_ != nullptr) {
     RemoveWindowSubclass(child_view_, &FlutterWindow::ChildHitTestProc,
                          kChildHitTestSubclassId);
     child_view_ = nullptr;
   }
+  ShutdownTrace("C2-subclass-removed");
   if (tray_icon_added_) {
     NOTIFYICONDATAW tray_icon{};
     tray_icon.cbSize = sizeof(tray_icon);
@@ -962,6 +986,7 @@ void FlutterWindow::OnDestroy() {
     Shell_NotifyIconW(NIM_DELETE, &tray_icon);
     tray_icon_added_ = false;
   }
+  ShutdownTrace("C3-tray-removed");
   // 临时诊断（退出卡顿定位）：这两步都是**跨进程 COM 调用**，分别找系统媒体
   // 会话管理器与 Explorer，且都跑在平台线程上——一旦对方忙，整个外壳连同输入
   // 会一起停住。进程马上就要结束，这些资源交给系统回收即可；先跳过它们，
@@ -969,10 +994,13 @@ void FlutterWindow::OnDestroy() {
   // media_controls_.Shutdown();
   // taskbar_controls_.Shutdown();
   floating_lyric_.Stop();
+  ShutdownTrace("C4-floating-stopped");
   // 先停采集线程（join）：之后不会再有新的帧写入信箱 / PostMessage。
   // 已排队的 WM_APP 频谱消息会随窗口销毁被丢弃，帧数据是成员变量，无泄漏。
   spectrum_capture_.Stop();
+  ShutdownTrace("C5-spectrum-stopped");
   system_audio_capture_.Stop();
+  ShutdownTrace("C6-systemaudio-stopped");
   {
     std::lock_guard<std::mutex> lock(spectrum_frame_mutex_);
     spectrum_frame_pending_ = false;
@@ -985,11 +1013,14 @@ void FlutterWindow::OnDestroy() {
   lyric_channel_.reset();
   message_channel_.reset();
   tray_channel_.reset();
+  ShutdownTrace("C7-channels-reset");
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
+  ShutdownTrace("C8-engine-destroyed");
 
   Win32Window::OnDestroy();
+  ShutdownTrace("C9-base-destroyed");
 }
 
 void FlutterWindow::HandleSpectrumFrame() {
@@ -1206,6 +1237,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
           SetForegroundWindow(hwnd);
         } else if (selected == kTrayMenuExit && !exit_requested_) {
           exit_requested_ = true;
+          ShutdownTrace("C-1-tray-menu-exit");
           if (tray_channel_) {
             tray_channel_->InvokeMethod(
                 "requestQuit",
