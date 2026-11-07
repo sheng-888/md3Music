@@ -2926,13 +2926,14 @@ class _MainLayoutState extends State<_MainLayout>
                   },
                   // 沉浸（封面流横屏）恒收起；停在二级页面（及以后）时按设置项决定
                   // （「二级页面隐藏菜单底栏」，默认隐藏）。二级判定由 ResponsiveShell
-                  // 根据路由栈及详情面板上报；侧栏同样
-                  // 在二级页面收起，只是不受该设置影响（设置只管竖屏底栏）。
+                  // 根据路由栈及详情面板上报。
+                  // 横屏侧栏只在沉浸时收起：二级页面（历史 / 排行 / 歌单详情等）
+                  // 保留 NavigationRail，不再让内容区突然撑大、侧栏向左滑走。
                   hideNavigation:
                       immersive ||
                       (_secondaryPageOnTop &&
                           kHideNavBarOnSecondaryPages.value),
-                  hideRailNavigation: immersive || _secondaryPageOnTop,
+                  hideRailNavigation: immersive,
                   body: _buildBody(context, visibleTabs, immersive),
                 ),
         ),
@@ -3236,7 +3237,8 @@ class _MainLayoutState extends State<_MainLayout>
             duration,
             capsuleNavHiddenAtSettle:
                 railLayout || kHideNavBarOnSecondaryPages.value,
-            // 二级页的 rail 已随页收起（hideRailNavigation），胶囊区回到全屏宽。
+            // 冻结快照仅供测试对照；浮层端点逐帧读 rail 的实时保留宽，
+            // 二级页保留 rail 后会自动跟随（见 bottom_bar_morph_overlay）。
             capsuleBodyLeadingInset: 0.0,
           );
           _verifyPushedPageHasCapsule(navRoute);
@@ -3247,7 +3249,7 @@ class _MainLayoutState extends State<_MainLayout>
             return;
           }
           // 胶囊在这一侧是**被弹出的二级页**（当前结算形态），其底栏状态同样
-          // 由该设置决定；横屏 rail 布局恒视为已收、胶囊区全屏宽（同 push）。
+          // 由该设置决定；横屏 rail 布局本就没有底栏，恒视为已收（同 push）。
           _driveBarFormFlight(
             duration,
             capsuleNavHiddenAtSettle:
@@ -3280,15 +3282,10 @@ class _MainLayoutState extends State<_MainLayout>
   /// 本次形态翻转之后，导航栏还会不会在转场收敛时起 260ms 收起/恢复动画
   /// —— 交棒窗口据此顺延（两端真身要等导航栏落定才到结算端点）。
   bool _barFormNavWillToggle() {
-    // 横屏 rail 布局：侧栏已改为与竖屏底栏同一套逐帧收起动画（槽位宽度按
-    // 进度收缩，见 responsive_layout 的 _buildRailLayout），且 rail 恒随二级页
-    // 翻转收起（hideRailNavigation，不受设置开关影响）——转场收敛后 rail 仍有
-    // 260ms 在变几何，内容区宽（胶囊 trackW 的来源）逐帧变。不顺延窗口的话，
-    // 交棒发生在 rail 半滑出时：端点按"已全宽"解析、真身仍在让 rail，胶囊
-    // 位置/宽度当场跳变。与竖屏同口径顺延 + settle slack。
-    if (usesNavigationRail(MediaQuery.sizeOf(context).width)) {
-      return _formSecondaryOnTop != _secondaryPageOnTop;
-    }
+    // 横屏 rail 布局没有底栏，二级页也不再收起侧栏，导航几何全程不变，
+    // 无需为 rail 顺延窗口。封面流沉浸虽仍收 rail，但那是 tab 内状态切换，
+    // 不走本处的 navigation 因由（见 _syncBarFormTarget 的 resolvedCause）。
+    if (usesNavigationRail(MediaQuery.sizeOf(context).width)) return false;
     return (_formSecondaryOnTop && kHideNavBarOnSecondaryPages.value) !=
         (_secondaryPageOnTop && kHideNavBarOnSecondaryPages.value);
   }
@@ -3366,7 +3363,8 @@ class _MainLayoutState extends State<_MainLayout>
   /// —— 浮层的胶囊端点已改为逐帧跟随 rail 的实时可见保留宽
   /// `navigationRailVisibleInset`，见 bottom_bar_morph_overlay；本快照保留在
   /// 冻结 API 上供测试对照）。横屏一级页 = rail+分隔线
-  /// （`navigationRailReservedWidth`），竖屏 / 横屏二级页（rail 已随页收起）= 0。
+  /// （`navigationRailReservedWidth`），竖屏 = 0；横屏二级页仍保留 rail，
+  /// 快照沿用 0（不参与端点计算，端点逐帧跟随实时保留宽）。
   void _startBarFormFlight(
     Duration duration, {
     required bool capsuleNavHiddenAtSettle,

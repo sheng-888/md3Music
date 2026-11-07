@@ -266,8 +266,8 @@ enum BarFormFlipCause {
 /// 形态（见 [kSecondaryPlayerOnPrimaryPages] 的判据说明）。关闭后这些页面保留底部
 /// NavigationBar，播放条仍是悬浮形态（相当于悬浮在导航栏上方）。
 ///
-/// 只管竖屏底栏：横屏侧边 NavigationRail 在二级页面同样收起（同一个二级判定），
-/// 但不受本开关影响。顶层 `_MainLayout` 监听它触发重建。
+/// 只管竖屏底栏：横屏侧边 NavigationRail 在二级页面保持常驻（只在封面流横屏
+/// 沉浸时收起），不受本开关影响。顶层 `_MainLayout` 监听它触发重建。
 final ValueNotifier<bool> kHideNavBarOnSecondaryPages =
     ValueNotifier<bool>(true);
 
@@ -389,8 +389,8 @@ class ResponsiveScaffold extends StatefulWidget {
 
   /// 为 true 时收起**横屏侧边 NavigationRail**（及分隔线）。
   ///
-  /// null = 跟随 [hideNavigation]。主布局显式传"路由栈是否离开栈底"，让横屏
-  /// 侧栏不受「二级页面隐藏菜单底栏」开关影响。
+  /// null = 跟随 [hideNavigation]。主布局显式传入，只让封面流横屏沉浸收起侧栏；
+  /// 二级页面保留侧栏，不受「二级页面隐藏菜单底栏」开关影响。
   final bool? hideRailNavigation;
 
   const ResponsiveScaffold({
