@@ -962,8 +962,12 @@ void FlutterWindow::OnDestroy() {
     Shell_NotifyIconW(NIM_DELETE, &tray_icon);
     tray_icon_added_ = false;
   }
-  media_controls_.Shutdown();
-  taskbar_controls_.Shutdown();
+  // 临时诊断（退出卡顿定位）：这两步都是**跨进程 COM 调用**，分别找系统媒体
+  // 会话管理器与 Explorer，且都跑在平台线程上——一旦对方忙，整个外壳连同输入
+  // 会一起停住。进程马上就要结束，这些资源交给系统回收即可；先跳过它们，
+  // 看「点退出瞬间整机卡一下」是否消失。定位完成后按结论改为异步或恢复。
+  // media_controls_.Shutdown();
+  // taskbar_controls_.Shutdown();
   floating_lyric_.Stop();
   // 先停采集线程（join）：之后不会再有新的帧写入信箱 / PostMessage。
   // 已排队的 WM_APP 频谱消息会随窗口销毁被丢弃，帧数据是成员变量，无泄漏。
