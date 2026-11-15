@@ -136,8 +136,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   EnsureStartMenuAumidShortcut();
 
   flutter::DartProject project(L"data");
-  // 播放页歌词是整屏重绘，Impeller-on-Windows 在这个场景会把光栅线程压满
-  // （实测播放时 GPU 70%+、窗口缩小即恢复流畅、CPU 仍有富余）。
+  // 6.4.0 起 Impeller 是唯一受支持的 Windows 后端：Skia 上新版歌词的离屏
+  // 光栅化会阻塞 UI 线程（切歌 / seek 时界面冻结数秒，音频不受影响）。
+  // 保留下面这个分支，是为了将来真遇到 Impeller 侧图形问题时能一键回退。
   // 引擎开关与「关于」页显示的引擎名同源，都由 render_engine.h 决定。
 #if !MD3MUSIC_USE_IMPELLER
   project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
