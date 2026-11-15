@@ -1155,11 +1155,17 @@ class _SettingsPageState extends State<SettingsPage>
     context.read<PlayerProvider>().setAudioFocusInterruptionMode(mode);
   }
 
+  /// 拖动中只改内存与全局通知器：Windows 的 shared_preferences 是整文件重写
+  /// （单键约 41~45ms），每帧落盘会让整个窗口在拖动过程中连续冻结。
+  /// 与同页「宽屏边距」滑块同节奏，松手（onChangeEnd）才写一次。
   void _setSecondaryPlayerOpacity(double value) {
     setState(() => _secondaryPlayerOpacity = value);
     kSecondaryPlayerOpacity.value = value;
+  }
+
+  void _persistSecondaryPlayerOpacity() {
     // ignore: discarded_futures
-    _settingsRepository.setSecondaryPlayerOpacity(value);
+    _settingsRepository.setSecondaryPlayerOpacity(_secondaryPlayerOpacity);
   }
 
   /// 音频焦点三选一的当前模式说明文字（跟随选中项）。
@@ -3468,6 +3474,8 @@ class _SettingsPageState extends State<SettingsPage>
                               onChanged: secondaryEnabled
                                   ? _setSecondaryPlayerOpacity
                                   : null,
+                              onChangeEnd: (_) =>
+                                  _persistSecondaryPlayerOpacity(),
                             )
                           : M3ESlider(
                               value: _secondaryPlayerOpacity,
@@ -3478,6 +3486,8 @@ class _SettingsPageState extends State<SettingsPage>
                               onChanged: secondaryEnabled
                                   ? _setSecondaryPlayerOpacity
                                   : null,
+                              onChangeEnd: (_) =>
+                                  _persistSecondaryPlayerOpacity(),
                             ),
                     ),
                     SizedBox(
@@ -5264,15 +5274,29 @@ class _SettingsPageState extends State<SettingsPage>
   }
 
   /// 从原生侧读取当前构建实际生效的渲染引擎（'skia' | 'impeller'）。
+  ///
+  /// 该通道由 Android（MainActivity.kt）与 Windows runner（flutter_window.cpp）
+  /// 注册；其余平台没有实现，如实返回「未知」。**不要回落到 skia**——那会让
+  /// 「实际跑 Impeller、界面显示 Skia」这种假信息掩盖真正的图形问题。
   Future<String> _readCurrentRenderEngine() async {
     try {
       const channel = MethodChannel('com.md3music.md3music/render_engine');
       final v = await channel.invokeMethod<String>('getCurrent');
       return v == 'impeller' ? 'impeller' : 'skia';
     } catch (_) {
-      return 'skia';
+      return '未知';
     }
   }
+
+  /// 渲染引擎的展示名：只认已知取值，未知如实标注。
+  ///
+  /// 不能「不是 impeller 就当 Skia」——那正是本次要修的误导源。
+  static String _renderEngineLabel(String? value) => switch (value) {
+    'impeller' => 'Impeller',
+    'skia' => 'Skia',
+    '未知' => '未知',
+    _ => '读取中…',
+  };
 
   /// 「硬件解码播放」三级子页：硬解开关、实测状态、设备解码器能力（MediaCodec）
   /// 与系统 offload 协商矩阵（折叠）。
@@ -7238,9 +7262,7 @@ class _SettingsPageState extends State<SettingsPage>
         FutureBuilder<String>(
           future: _readCurrentRenderEngine(),
           builder: (context, snap) {
-            final engine = snap.data == null
-                ? 'skia'
-                : (snap.data == 'impeller' ? 'Impeller' : 'Skia');
+            final engine = _renderEngineLabel(snap.data);
             return ListTile(
               leading: Icon(
                 Icons.high_quality_outlined,

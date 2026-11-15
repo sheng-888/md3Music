@@ -352,7 +352,18 @@ class DiagnosticExporter {
 
     String osVersion = '未知';
     String deviceModel = '未知';
-    String renderEngine = '不适用';
+    String renderEngine = '未知';
+    // 渲染引擎（skia / impeller）由构建期决定，是图形类 bug 的关键上下文。
+    // 通道由 Android（MainActivity.kt）与 Windows runner（flutter_window.cpp）
+    // 注册；其余平台没有实现，如实记为「未知」（原先只在 Android 分支里读，
+    // 桌面端永远拿到「不适用」）。
+    if (!kIsWeb) {
+      try {
+        const channel = MethodChannel('com.md3music.md3music/render_engine');
+        final v = await channel.invokeMethod<String>('getCurrent');
+        renderEngine = v == 'impeller' ? 'impeller' : 'skia';
+      } catch (_) {}
+    }
     if (!kIsWeb && Platform.isAndroid) {
       final summary = await MediaStoreService.getDeviceSummary();
       if (summary != null) {
@@ -361,13 +372,6 @@ class DiagnosticExporter {
         osVersion =
             'Android ${summary['release'] ?? ''} (API ${summary['sdkInt'] ?? ''})';
       }
-      // 渲染引擎（skia/impeller）由构建期 flavor 决定，是图形类 bug 的
-      // 关键上下文；复用设置页「当前渲染引擎」同款通道（MainActivity 注册）。
-      try {
-        const channel = MethodChannel('com.md3music.md3music/render_engine');
-        final v = await channel.invokeMethod<String>('getCurrent');
-        renderEngine = v == 'impeller' ? 'impeller' : 'skia';
-      } catch (_) {}
     } else if (!kIsWeb) {
       // Windows 桌面等非 Android 平台
       osVersion = Platform.operatingSystemVersion;

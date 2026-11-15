@@ -10,6 +10,7 @@
 #include <string>
 
 #include "flutter_window.h"
+#include "render_engine.h"
 #include "utils.h"
 
 namespace {
@@ -125,13 +126,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  // 必须记返回值：RPC_E_CHANGED_MODE 表示该线程已被初始化成另一种套间模型，
+  // 此时引用计数没有增加，后面再 CoUninitialize 就会减掉不属于自己的那一份，
+  // 让仍在使用的 COM 对象（SMTC / 任务栏按钮）工作在已释放的状态上。
+  const HRESULT com_init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   // AUMID 必须在创建窗口 / 初始化 SMTC 之前设置，进程级一次即可。
   ::SetCurrentProcessExplicitAppUserModelID(kAppUserModelId);
   EnsureStartMenuAumidShortcut();
 
   flutter::DartProject project(L"data");
+  // 播放页歌词是整屏重绘，Impeller-on-Windows 在这个场景会把光栅线程压满
+  // （实测播放时 GPU 70%+、窗口缩小即恢复流畅、CPU 仍有富余）。
+  // 引擎开关与「关于」页显示的引擎名同源，都由 render_engine.h 决定。
+#if !MD3MUSIC_USE_IMPELLER
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
+#endif
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
@@ -152,6 +162,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
-  ::CoUninitialize();
+  if (SUCCEEDED(com_init)) {
+    ::CoUninitialize();
+  }
   return EXIT_SUCCESS;
 }

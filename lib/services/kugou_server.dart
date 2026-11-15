@@ -87,7 +87,6 @@ class KugouApiServer {
   ];
   static final AsyncSerialQueue _nativeTransitions = AsyncSerialQueue();
   static DynamicLibrary? _lib;
-  static StopServer? _stopServerFn;
   static IsRunning? _isRunningFn;
 
   static Future<void> start() {
@@ -225,10 +224,13 @@ class KugouApiServer {
   }
 
   static Future<int> _startViaFfi() async {
-    if (Platform.isAndroid) {
-      // path_provider依赖PlatformChannel，只能先在主isolate取得可传递的路径。
-      final appDir = await getApplicationSupportDirectory();
-      final dataDirPath = appDir.path;
+    // 所有原生平台统一把 dlopen / 符号查找 / start_server 放进 worker isolate。
+    // 桌面端原先在主 isolate 同步执行（Android 早已移走）：冷启动与每次自动
+    // 重连时 Rust 初始化会占住 UI isolate，表现为与页面无关的「整窗冻一下」。
+    // path_provider 依赖 PlatformChannel，路径先在主 isolate 取好再传字符串。
+    final appDir = await getApplicationSupportDirectory();
+    final dataDirPath = appDir.path;
+    try {
       final nativeTimes = await Isolate.run(
         () => _startServerInWorker(_libraryName(), dataDirPath),
       );
@@ -237,32 +239,28 @@ class KugouApiServer {
         'lookup_ms=${nativeTimes[2]} start_server_ms=${nativeTimes[3]}',
       );
       return nativeTimes[0];
-    }
-
-    final lib = _loadLib();
-    final startServer = lib.lookupFunction<StartServerNative, StartServer>(
-      'start_server',
-    );
-    _stopServerFn ??= lib.lookupFunction<StopServerNative, StopServer>(
-      'stop_server',
-    );
-    _isRunningFn ??= lib.lookupFunction<IsRunningNative, IsRunning>(
-      'is_server_running',
-    );
-
-    final appDir = await getApplicationSupportDirectory();
-    final dataDirPath = appDir.path.toNativeUtf8();
-    late int port;
-    try {
-      port = startServer(0, dataDirPath);
-      print('kugou_server start_server returned port: $port');
-      if (port <= 0) {
-        throw StateError('start_server failed with code $port');
+    } catch (e) {
+      // Android 由调用方回退 MethodChannel；桌面端在此就地兜底，
+      // 保证个别环境 isolate 内无法解析 DLL 时功能仍可用（仅这一次会占 UI）。
+      if (Platform.isAndroid) rethrow;
+      print('[LocalAPI] isolate start failed, main-isolate fallback: $e');
+      final lib = _loadLib();
+      final startServer = lib.lookupFunction<StartServerNative, StartServer>(
+        'start_server',
+      );
+      final nativePath = dataDirPath.toNativeUtf8();
+      late final int port;
+      try {
+        port = startServer(0, nativePath);
+        print('kugou_server start_server returned port: $port');
+        if (port <= 0) {
+          throw StateError('start_server failed with code $port');
+        }
+      } finally {
+        calloc.free(nativePath);
       }
-    } finally {
-      calloc.free(dataDirPath);
+      return port;
     }
-    return port;
   }
 
   /// 把 Rust 返回的实际端口写入 baseUrl（全部请求走本地随机端口）。
@@ -380,18 +378,10 @@ class KugouApiServer {
   static Future<void> _stopNativeServer() async {
     // 优先用 FFI 停止（不依赖 JNI 符号）。
     try {
-      if (Platform.isAndroid) {
-        // Rust stop() 会 join listener 线程；在主 isolate 同步调用会冻结UI。
-        await Isolate.run(() => _stopServerInWorker(_libraryName()));
-        print('KugouApiServer stopped via background FFI isolate');
-        return;
-      }
-      final lib = _loadLib();
-      _stopServerFn ??= lib.lookupFunction<StopServerNative, StopServer>(
-        'stop_server',
-      );
-      _stopServerFn!();
-      print('KugouApiServer stopped via FFI');
+      // Rust stop() 会 join listener 线程；在主 isolate 同步调用会冻结 UI。
+      // 所有原生平台统一移到 worker（FFI 函数指针不跨 isolate 传递）。
+      await Isolate.run(() => _stopServerInWorker(_libraryName()));
+      print('KugouApiServer stopped via background FFI isolate');
       return;
     } catch (e) {
       print('KugouApiServer FFI stop error: $e');

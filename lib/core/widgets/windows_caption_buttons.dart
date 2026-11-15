@@ -231,6 +231,12 @@ class _WindowsCaptionButtonRowState extends State<WindowsCaptionButtonRow>
   /// 帧驱动校验是否在进行中（动画期间逐帧比几何，结束后自动停）。
   bool _watchingFrames = false;
 
+  /// persistent frame callback 每帧常驻且**没有对应的注销 API**
+  /// （WidgetsBinding 只有 addPersistentFrameCallback）。原实现每次播放页
+  /// 展开都重新注册一次，开合 N 次后同一函数每帧执行 N 次几何测量，
+  /// 越用越卡。整个实例只注册一次，是否工作由 [_watchingFrames] 门控。
+  bool _frameObserverRegistered = false;
+
   /// 上报在途标记：避免帧回调与异步上报叠加成并发（通道调用有 await）。
   bool _reporting = false;
 
@@ -249,6 +255,11 @@ class _WindowsCaptionButtonRowState extends State<WindowsCaptionButtonRow>
     PlayerPanelSignal.expansion.addListener(_onExpansionChanged);
     _refreshMaximized();
     _scheduleRectReport();
+    // 常驻帧回调整个实例只注册一次；动画期间由 _watchingFrames 决定要不要工作。
+    if (!_frameObserverRegistered) {
+      _frameObserverRegistered = true;
+      WidgetsBinding.instance.addPersistentFrameCallback(_onFrameCheck);
+    }
   }
 
   void _onOwnerChanged() {
@@ -267,7 +278,7 @@ class _WindowsCaptionButtonRowState extends State<WindowsCaptionButtonRow>
     if (!mounted) return;
     if (_watchingFrames) return;
     _watchingFrames = true;
-    WidgetsBinding.instance.addPersistentFrameCallback(_onFrameCheck);
+    // 帧回调在 initState 已常驻注册一次；这里只开门控，绝不能重复注册。
     // 兜底：动画结束若没有后续帧，用一次 post-frame 收尾并停表。
     _reportDebounce?.cancel();
     _reportDebounce = Timer(const Duration(milliseconds: 400), _stopWatch);
@@ -279,6 +290,9 @@ class _WindowsCaptionButtonRowState extends State<WindowsCaptionButtonRow>
       _watchingFrames = false;
       return;
     }
+    // 常驻回调无法注销，动画结束后 _stopWatch 只置标志；必须在此提前返回，
+    // 否则组件存活期间每帧都做 findRenderObject + localToGlobal + 通道去重。
+    if (!_watchingFrames) return;
     if (!_reporting) {
       _reporting = true;
       _reportRectNow().whenComplete(() => _reporting = false);

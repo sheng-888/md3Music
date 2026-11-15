@@ -95,6 +95,10 @@ class FlutterWindow : public Win32Window {
   // fluttertoast 在 Windows 无实现，这里使用非模态原生短暂提示。
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> message_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> tray_channel_;
+  // 渲染引擎上报（与 Android 同一通道名）：值取自 render_engine.h 的编译期宏，
+  // 与 main.cpp 的引擎开关同源，避免「实际后端」与「界面显示」对不上。
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      render_engine_channel_;
   // 音乐频谱：与 Android 同一通道名/同一 onFft 协议，Dart 侧无需分叉。
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       spectrum_channel_;

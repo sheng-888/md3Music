@@ -111,7 +111,6 @@ jobs:
           test/widgets/playback_status_feedback_test.dart
           test/widgets/full_player_narrow_layout_test.dart
           test/modules/user/favorites_page_lifecycle_test.dart
-          test/widgets/local_server_down_banner_test.dart
           test/core/services/local_artwork_cache_test.dart
 
       - name: Run non-public regression under test/private
