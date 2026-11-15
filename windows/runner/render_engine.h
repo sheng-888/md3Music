@@ -12,7 +12,7 @@
 // 为什么是 0：播放页歌词是整屏重绘，Impeller-on-Windows 在这个场景会把光栅
 // 线程压满（实测播放时 GPU 70%+、窗口缩小即恢复流畅、CPU 仍有富余）。等引擎
 // 侧把这层缓存补上，把这里改回 1 即可恢复默认。
-#define MD3MUSIC_USE_IMPELLER 0
+#define MD3MUSIC_USE_IMPELLER 1
 
 #if MD3MUSIC_USE_IMPELLER
 #define MD3MUSIC_RENDER_ENGINE "impeller"
