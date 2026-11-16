@@ -45,6 +45,27 @@ enum LyricFillMode { classic, sweep }
 /// 与 [LyricFillMode] 一样，持久化时存 `name`，未知值回退默认。
 enum GlowThresholdMode { adaptive, fixed }
 
+/// AM 歌词整体水平位置（三选一，默认置左）。
+///
+/// 与「男女对唱歌词优化」互斥：对唱开启时逐行性别/歌手对齐接管，本设置
+/// 不生效（设置页同时禁用下拉，但保留用户已选的值）；关闭对唱后所有歌词行
+/// 统一按此位置排版。
+enum LyricPosition { left, center, right }
+
+/// 持久化 name → [LyricPosition]；null / 未知值一律回退 [LyricPosition.left]。
+LyricPosition lyricPositionFromName(String? name) => switch (name) {
+      'center' => LyricPosition.center,
+      'right' => LyricPosition.right,
+      _ => LyricPosition.left,
+    };
+
+/// 三选一的中文标签（设置页下拉条目）。
+String lyricPositionLabel(LyricPosition position) => switch (position) {
+      LyricPosition.left => '置左',
+      LyricPosition.center => '居中',
+      LyricPosition.right => '置右',
+    };
+
 /// 歌词显示偏好设置（字号 + 行间距 + 字体）。
 ///
 /// 提供全局静态访问 + ChangeNotifier 通知，供 AppleLyricsView、
@@ -288,7 +309,7 @@ class LyricPreferences extends ChangeNotifier {
   static double get defaultLineSpacingForCurrentPlatform =>
       Platform.isWindows ? 0.8 : _deviceDefaultLineSpacing;
 
-  /// 非当前行缩放（默认 0.60，范围 0~1 全覆盖；1 = 与当前行等大）。
+  /// 非当前行缩放（Windows 默认 0.60；安卓默认 0.850，只比当前行小一号）。
   /// 上沿 1.00 是物理边界：非当前行不可大于当前行（activeScale=1.0）。
   /// 下沿放到 0 让左侧行程充足；渲染侧对 <0.01 的值做极小平滑钳制，
   /// 避免 canvas.scale(0) 导致离屏模糊矩阵退化。
@@ -296,7 +317,7 @@ class LyricPreferences extends ChangeNotifier {
       Platform.isWindows || Platform.isAndroid ? 0.0 : minInactiveScale;
   static double get maxInactiveScaleForCurrentPlatform => maxInactiveScale;
   static double get defaultInactiveScaleForCurrentPlatform =>
-      Platform.isWindows || Platform.isAndroid ? 0.60 : defaultInactiveScale;
+      Platform.isWindows ? 0.60 : defaultInactiveScale;
 
   /// 当前行垂直锚位（默认 0.35，范围 0.05~0.65 关于 0.35 对称）。
   ///
@@ -636,6 +657,7 @@ class LyricPreferences extends ChangeNotifier {
   static const String _keyShowTranslation = 'lyric_show_translation';
   static const String _keyDisplayMode = 'lyric_display_mode';
   static const String _keyUseDuetLayout = 'lyric_use_duet_layout';
+  static const String _keyLyricPosition = 'lyric_position';
   static const String _keyLineBalance = 'lyric_line_balance';
   static const String _keyEcoMode = 'lyric_eco_mode';
   static const String _keyUseDynamicLyricColor = 'lyric_dynamic_color';
@@ -690,6 +712,8 @@ class LyricPreferences extends ChangeNotifier {
   bool _softEdgeAntiAlias = defaultSoftEdgeAntiAlias;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
+  // 歌词整体水平位置默认置左（与改造前的 defaultAlign 行为一致）。
+  LyricPosition _lyricPosition = LyricPosition.left;
   // 平衡行换行默认关闭：保持歌词布局的原始自动换行行为。
   bool _lineBalance = false;
   bool _showTranslation = true;
@@ -810,6 +834,11 @@ class LyricPreferences extends ChangeNotifier {
   bool get softEdgeAntiAlias => _softEdgeAntiAlias;
   bool get useFlowingBackground => _useFlowingBackground;
   bool get useDuetLayout => _useDuetLayout;
+
+  /// 歌词整体水平位置（默认 [LyricPosition.left]）。
+  ///
+  /// 仅在 [useDuetLayout] 关闭时生效；对唱开启时逐行对齐优先。
+  LyricPosition get lyricPosition => _lyricPosition;
 
   /// 平衡行换行是否开启（默认关闭）。
   ///
@@ -1013,6 +1042,8 @@ class LyricPreferences extends ChangeNotifier {
         defaultSoftEdgeAntiAlias;
     _useFlowingBackground = prefs.getBool(_keyUseFlowingBackground) ?? false;
     _useDuetLayout = prefs.getBool(_keyUseDuetLayout) ?? false;
+    _lyricPosition =
+        lyricPositionFromName(prefs.getString(_keyLyricPosition));
     _lineBalance = prefs.getBool(_keyLineBalance) ?? false;
     _showTranslation = prefs.getBool(_keyShowTranslation) ?? true;
     _displayMode = _displayModeFromName(prefs.getString(_keyDisplayMode));
@@ -1280,6 +1311,15 @@ class LyricPreferences extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyUseDuetLayout, enabled);
+  }
+
+  /// 设置歌词整体水平位置并持久化（对唱开启时不改写本值）。
+  Future<void> setLyricPosition(LyricPosition position) async {
+    if (_lyricPosition == position) return;
+    _lyricPosition = position;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyLyricPosition, position.name);
   }
 
   /// 设置平衡行换行开关并持久化。
@@ -1878,6 +1918,7 @@ class LyricPreferences extends ChangeNotifier {
     _useGlowEffect = false;
     _useFlowingBackground = false;
     _useDuetLayout = false;
+    _lyricPosition = LyricPosition.left;
     _lineBalance = false;
     _showTranslation = true;
     _displayMode = LyricDisplayMode.translation;
@@ -1925,6 +1966,7 @@ class LyricPreferences extends ChangeNotifier {
     await prefs.setBool(_keyUseGlowEffect, _useGlowEffect);
     await prefs.setBool(_keyUseFlowingBackground, _useFlowingBackground);
     await prefs.setBool(_keyUseDuetLayout, _useDuetLayout);
+    await prefs.remove(_keyLyricPosition);
     await prefs.setBool(_keyLineBalance, _lineBalance);
     await prefs.setBool(_keyShowTranslation, _showTranslation);
     await prefs.setString(_keyDisplayMode, _displayMode.name);

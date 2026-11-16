@@ -235,6 +235,22 @@ class LocalMusicRepository {
   bool _isExcluded(String filePath, List<String> excludedFolders) =>
       isExcluded(filePath, excludedFolders);
 
+  static final RegExp _storagePathPattern = RegExp(r'^/storage/([^/]+)/(.+)$');
+
+  /// 把真实文件路径映射成与 MediaStore / SAF 一致的存储键（`卷名:相对路径`），
+  /// 用于跨来源去重；无法识别的路径返回空串（不参与去重）。
+  static String _storageKeyForPath(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    for (final prefix in const ['/storage/emulated/0/', '/sdcard/']) {
+      if (normalized.startsWith(prefix)) {
+        return 'primary:${normalized.substring(prefix.length)}'.toLowerCase();
+      }
+    }
+    final match = _storagePathPattern.firstMatch(normalized);
+    if (match == null) return '';
+    return '${match.group(1)}:${match.group(2)}'.toLowerCase();
+  }
+
   /// 根据码率和文件扩展名推断本地音质标签。
   ///
   /// 规则：
@@ -296,14 +312,20 @@ class LocalMusicRepository {
         var filePath = rawPath;
         String? folderPath;
         final volumeName = data['volumeName'] as String? ?? '';
+        // 主卷在 MediaStore 里叫 external_primary，而 SAF 的 documentId 前缀是
+        // primary；统一成同一套 key，同一文件就不会被两个来源各收一次。
+        final storageVolume =
+            volumeName == 'external_primary' ? 'primary' : volumeName;
+        final relative = (data['relativePath'] as String? ?? '')
+            .replaceFirst(RegExp(r'/+$'), '');
+        final name = displayName ?? '';
+        if (storageVolume.isNotEmpty && name.isNotEmpty) {
+          final keyPath = relative.isEmpty ? name : '$relative/$name';
+          seenStorageKeys.add('$storageVolume:$keyPath'.toLowerCase());
+        }
         if (volumeName.isNotEmpty && volumeName != 'external_primary') {
           // 可移除卷按需在播放时解析 URI，不能扫描时复制整张 U 盘到私有存储。
-          final relative = (data['relativePath'] as String? ?? '')
-              .replaceFirst(RegExp(r'/+$'), '');
           folderPath = 'storage://$volumeName/$relative';
-          final name = displayName ?? '';
-          final path = relative.isEmpty ? name : '$relative/$name';
-          seenStorageKeys.add('$volumeName:$path'.toLowerCase());
         }
 
         // 把 `content://` 提前解析为真实文件路径。
@@ -313,8 +335,10 @@ class LocalMusicRepository {
           try {
             final resolved = await MediaStoreService.resolveLocalPath(filePath);
             if (resolved != null && resolved.isNotEmpty) {
+              // 两条 MediaStore 记录解析到同一真实文件时只保留第一条，
+              // 避免同一首歌（及所在文件夹）被重复加载。
+              if (!seenPaths.add(resolved)) continue;
               filePath = resolved;
-              seenPaths.add(filePath);
             }
           } catch (_) {
             // 解析失败保留 content://，由 PlayerProvider 兜底重试
@@ -390,10 +414,13 @@ class LocalMusicRepository {
           final folder = data['folderPath'] as String? ?? treeUri;
           final name = data['displayName'] as String? ?? '';
           final storageKey = (data['storageKey'] as String? ?? '').toLowerCase();
+          // MediaStore 与 SAF 可能把同一文件各收一次（主卷/外部卷命名不同），
+          // 除 documentId 外再按规范化真实路径兜一次，避免歌曲与文件夹重复。
           if (uri == null || uri.isEmpty ||
               isAndroidUnsupportedAudioFile(name) ||
               _isExcluded(folder, excluded) ||
               (storageKey.isNotEmpty && seenStorageKeys.contains(storageKey)) ||
+              seenPaths.contains(_normalizeComparablePath(uri)) ||
               !seenPaths.add(uri)) {
             continue;
           }
@@ -447,6 +474,12 @@ class LocalMusicRepository {
           for (final data in results) {
             final filePath = data['filePath'] as String;
             if (!seenPaths.add(filePath)) continue;
+            // MediaStore 解析失败退回私有缓存时路径对不上，这里按卷内相对路径
+            // 再兜一次，避免同一文件同时出现在缓存拷贝与文件系统结果里。
+            final storageKey = _storageKeyForPath(filePath);
+            if (storageKey.isNotEmpty && seenStorageKeys.contains(storageKey)) {
+              continue;
+            }
             final bitrate = data['bitrate'] as int?;
             songs.add(
               Song(

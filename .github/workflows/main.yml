@@ -376,32 +376,30 @@ jobs:
           native_code() { "$aapt2" dump badging "$1" | sed -n "s/^native-code: //p"; }
           impeller_val() {
             "$aapt2" dump xmltree "$1" --file AndroidManifest.xml > "$RUNNER_TEMP/manifest.txt"
-            # 原实现用 `sed -n "/EnableImpeller/,+1p"` 只取 name 行的**下一行**，
-            # 假设 android:value 紧随其后。但 aapt2 的属性输出顺序不保证，
-            # value 可能排在 name 之前或夹在别的属性中间 ⇒ 抓不到就fallback 成 false，
-            # 表现为「构建参数明明传了 Impeller=true，校验却报 false」
-            # （2026-10-12 v6.0.0 实测：apple-music 包实际是 Impeller，校验报 false）。
-            #
-            # 改为：从 name 行一直取到**下一个 E: (元素开始)** 为止，
-            # 在这段范围内找 android:value 的原始值。
-            local block
+            # 从 name 行一直取到**下一个 E: (元素开始)** 为止，在这段范围内找
+            # android:value（aapt2 的属性输出顺序不保证，不能只看下一行）。
+            local block raw
             block=$(sed -n '/io\.flutter\.embedding\.android\.EnableImpeller/,/^ *E: /p' \
                     "$RUNNER_TEMP/manifest.txt" | grep -m1 'android:value' || true)
-            if echo "$block" | grep -q '0xffffffff'; then
-              echo "true"
-            elif echo "$block" | grep -qE '0x0|\(type 3\).*0x0'; then
-              echo "false"
-            elif echo "$block" | grep -q '\(type 3\)'; then
-              #字符串型布尔：raw=false 才是关闭
-              if echo "$block" | grep -qi '=false'; then echo "false"; else echo "true"; fi
-            else
-              # 没抓到 android:value：不要静默当成 false（会把真问题掩盖成"通过"），
-              # 打印原始片段便于排查，并按 true 处理以免误报警告。
-              echo "  (impeller_val: 未在 manifest 中定位到 EnableImpeller 的 android:value)" >&2
-              sed -n '/io\.flutter\.embedding\.android\.EnableImpeller/,+4p' \
-                "$RUNNER_TEMP/manifest.txt" >&2 || true
-              echo "unknown"
-            fi
+            # 只取等号之后的值，避免把属性自带的资源 ID（0x01010024 里含子串
+            # "0x0"）误当成取值——2026-11-15 实测：这会让任何 =true 都判成 false。
+            raw=$(printf '%s\n' "$block" | sed -n 's/.*android:value(0x[0-9a-fA-F]*)//p')
+            # 字符串型会带引号（="true"），去掉引号后统一比较
+            raw=${raw//\"/}
+            # 不同 aapt2 版本打印形式不同，全部兼容：
+            #   =true / ="true" / =false / ="false"
+            #   =(type 0x12)0xffffffff / =(type 0x12)0x0 / =0xffffffff / =0x0
+            case "$raw" in
+              *=true*|*0xffffffff*) echo "true" ;;
+              *=false*|*0x12\)0x0*|*=0x0) echo "false" ;;
+              *)
+                # 认不出就报 unknown，不要静默当成 false（会把真问题掩盖成"通过"），
+                # 也打印原始片段便于排查。
+                echo "  (impeller_val: 无法识别的 EnableImpeller 值: [$raw])" >&2
+                sed -n '/io\.flutter\.embedding\.android\.EnableImpeller/,+2p' \
+                  "$RUNNER_TEMP/manifest.txt" >&2 || true
+                echo "unknown" ;;
+            esac
           }
 
           # 完整性校验：发布包不得含任何推理资产（3D / 分离）
@@ -594,6 +592,7 @@ jobs:
             echo "- **MD3Music-${VERSION}-tv-arm64-v8a.apk** — TV版-64位：Android TV 专用包（D-pad 遥控导航，包名后缀 \`.tv\`，Skia）"
             echo "- **MD3Music-${VERSION}-tv-armeabi-v7a.apk** — TV版-32位：Android TV 专用包（D-pad 遥控导航，包名后缀 \`.tv\`，Skia）"
             echo "- **md3music-windows-${VERSION}.zip** — Windows 便携版：解压后运行 \`md3music.exe\` 即可（自带 VC++ 运行库）"
+            echo "- **MD3Music-${VERSION}-symbols.zip** — （普通用户无需下载）混淆符号表：仅供开发者用 \`flutter symbolize\` 还原崩溃堆栈，需与同版本 APK 配套"
             echo ""
             echo "### 更新内容 (${RANGE:-最近 20 条})"
             echo ""

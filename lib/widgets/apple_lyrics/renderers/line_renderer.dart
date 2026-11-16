@@ -245,6 +245,12 @@ class LineRenderer {
   double _staticLogicalH = 0;
   double _staticPadX = 0;
   double _staticPadY = 0;
+  /// 整行图在视口中的绘制左上角 x（含对齐，不含 pad）。
+  ///
+  /// 烘焙图只截取文字本身（textW + 2pad），居中/置右时文字起点不在 0，
+  /// 必须把对齐后的 x 一并记下，绘制时用 `_staticX - pad` 定位；
+  /// 旧实现固定用 `offset.dx - pad`，导致居中/置右的整行图被图片右缘裁掉。
+  double _staticX = 0;
   final Paint _staticPaint = Paint();
 
   /// 屏幕像素比，由上层在创建 renderer 时注入（用于整行图分辨率）。
@@ -305,6 +311,7 @@ class LineRenderer {
         viewportWidth: viewportWidth,
         plan: plan,
         sig: sig,
+        leftPadding: offset.dx,
       );
       return false;
     }
@@ -321,7 +328,7 @@ class LineRenderer {
       image,
       Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()),
       Rect.fromLTWH(
-        offset.dx - _staticPadX,
+        _staticX - _staticPadX,
         offset.dy - _staticPadY,
         _staticLogicalW,
         _staticLogicalH,
@@ -339,6 +346,7 @@ class LineRenderer {
     required double viewportWidth,
     required LyricWrapPlan plan,
     required String sig,
+    required double leftPadding,
   }) {
     if (_staticBaking || _staticUnavailable) return;
     if (devicePixelRatio <= 0 || viewportWidth <= 0) return;
@@ -357,6 +365,7 @@ class LineRenderer {
         viewportWidth: viewportWidth,
         plan: plan,
         sig: sig,
+        leftPadding: leftPadding,
       ),
     );
   }
@@ -369,6 +378,7 @@ class LineRenderer {
     required double viewportWidth,
     required LyricWrapPlan plan,
     required String sig,
+    required double leftPadding,
   }) async {
     try {
       final double rowH = LyricLayout.lineHeightForRows(
@@ -387,11 +397,10 @@ class LineRenderer {
           ),
         ),
         textDirection: TextDirection.ltr,
-      )..layout(
-        maxWidth: maxWidth.isFinite && maxWidth > 0
-            ? maxWidth
-            : max(1.0, viewportWidth),
       );
+      // 已是单行计划（isMultiLine 提前返回），按自然宽度排版：若让 TextPainter
+      // 再按 maxWidth 自行折行，多出的行会落到 rowH 之外被图片裁掉。
+      painter.layout(maxWidth: double.infinity);
       final double textW = painter.width;
       final double logicalW = textW + pad * 2;
       final double logicalH = rowH + pad * 2;
@@ -399,9 +408,11 @@ class LineRenderer {
       final ui.PictureRecorder recorder = ui.PictureRecorder();
       final Canvas bakeCanvas = Canvas(recorder);
       bakeCanvas.scale(dpr);
-      // 文本在图片内的 x：用同一套对齐函数（offset.dx = 0），绘制时再平移。
-      final double x = _alignX(alignment, 0, textW, viewportWidth);
-      painter.paint(bakeCanvas, Offset(x + pad, pad));
+      // 图内文字固定从 pad 开始（图片只截文字本身）；对齐后的视口 x 单独记录，
+      // 绘制时用 `_staticX - pad` 定位。旧实现把视口 x 直接画进小图，
+      // 居中/置右时文字大半落在图外 → 真机「只显示一半」。
+      _staticX = _alignX(alignment, leftPadding, textW, viewportWidth);
+      painter.paint(bakeCanvas, Offset(pad, pad));
       painter.dispose();
       final ui.Image image = await recorder.endRecording().toImage(
         (logicalW * dpr).ceil().clamp(1, 8192),
@@ -679,8 +690,13 @@ class LineRenderer {
           height: LyricLayout.lineHeight,
         ),
       );
+      // 单行的断点由计划决定：按自然宽度排版，避免 TextPainter 因字距/字形
+      // 比计划略宽而自行折出第二行（该行会被行盒与模糊图裁掉，表现为半行）。
+      // 多行由 _paintMultiLineAligned 按计划逐行绘制，这里保留约束不影响结果。
       _painter.layout(
-        maxWidth: maxWidth == double.infinity ? double.infinity : maxWidth,
+        maxWidth: plan.isMultiLine
+            ? (maxWidth == double.infinity ? double.infinity : maxWidth)
+            : double.infinity,
       );
       _lastSetAlpha = _currentAlpha;
       _lastSetMaxWidth = maxWidth;

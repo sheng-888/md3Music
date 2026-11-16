@@ -59,6 +59,7 @@ const List<({String label, String category, String subpage, String aliases})>
   (label: '清理深度图缓存', category: '播放页样式', subpage: '封面与动态', aliases: '3D 封面 缓存;清理 缓存;深度 缓存'),
   (label: '封面与动态', category: '播放页样式', subpage: '封面与动态', aliases: ''),
   (label: '男女对唱歌词优化', category: '播放页样式', subpage: '歌词效果', aliases: '对唱 男女'),
+  (label: '歌词位置', category: '播放页样式', subpage: '歌词效果', aliases: '歌词位置 对齐 置左 居中 置右 左对齐 右对齐 居中对齐 水平位置'),
   (label: '歌词动态颜色', category: '播放页样式', subpage: '歌词效果', aliases: '动态颜色 混色'),
   (label: '上方行使用已播颜色', category: '播放页样式', subpage: '歌词效果', aliases: '上方 已播 已唱 模糊层 高亮'),
   (label: '歌词高斯模糊', category: '播放页样式', subpage: '歌词效果', aliases: '高斯模糊 模糊'),

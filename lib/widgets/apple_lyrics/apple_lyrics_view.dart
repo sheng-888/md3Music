@@ -50,6 +50,22 @@ double _minLegibleLineScale(double fontSize) {
   return floor / fontSize;
 }
 
+/// 生效的歌词水平位置：对唱开启时恒为置左（逐行对齐由 [DuetLayout] 接管），
+/// 与「歌词位置」设置互斥；对唱关闭时取用户选择的位置。
+LyricPosition effectiveLyricPosition() =>
+    LyricPreferences.instance.useDuetLayout
+        ? LyricPosition.left
+        : LyricPreferences.instance.lyricPosition;
+
+/// 全局水平位置 → 逐行 [DuetAlignment]。置左沿用历史 defaultAlign
+/// （在所有渲染路径中与 left 等价），不引入新的对齐语义。
+DuetAlignment _duetAlignmentForPosition(LyricPosition position) =>
+    switch (position) {
+      LyricPosition.center => DuetAlignment.center,
+      LyricPosition.right => DuetAlignment.right,
+      LyricPosition.left => DuetAlignment.defaultAlign,
+    };
+
 /// Apple Music 风格歌词主组件。
 ///
 /// 调用方负责通过 [LyricParserChain.parse] 解析得到 [lines]，本组件不再解析。
@@ -745,6 +761,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   @visibleForTesting
   Map<int, AuxTextImage> get auxTextImagesForTest => _auxTextImages;
 
+  /// 当前生效的逐行对齐（测试观测用：验证全局位置与对唱互斥）。
+  List<DuetAlignment> get duetAlignmentsForTest => _duetAlignments;
+
   /// 手动触发副行清晰图预热（仅测试用）。
   @visibleForTesting
   void syncAuxTextImagesForTest(int focus) => _syncAuxTextImages(focus);
@@ -916,6 +935,9 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 上次处理对唱时的 useDuetLayout 值。
   bool _cachedUseDuetLayout = false;
 
+  /// 上次处理对唱时的生效水平位置（位置变化必须重算对齐并失效模糊图缓存）。
+  LyricPosition _cachedLyricPosition = LyricPosition.left;
+
   /// 缓存的 hasTimestamps 结果（避免每帧 O(N) 遍历所有 lines）。
   /// 在 _recomputeDuetIfNeeded 中随 lines 引用变化时更新。
   bool _cachedHasTimestamps = false;
@@ -928,15 +950,18 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
   /// 持续推进逐字渐变/上浮/辉光动画。
   bool _cachedHasAnyWordTiming = false;
 
-  /// 重算对唱预处理结果（若 lines 引用或开关变化）。
+  /// 重算对唱预处理结果（若 lines 引用、对唱开关或歌词位置变化）。
   void _recomputeDuetIfNeeded() {
     final useDuet = LyricPreferences.instance.useDuetLayout;
+    final position = effectiveLyricPosition();
     if (useDuet == _cachedUseDuetLayout &&
+        position == _cachedLyricPosition &&
         identical(widget.lines, _cachedDuetLinesRef) &&
         _cleanedLines.length == widget.lines.length) {
       return;
     }
     _cachedUseDuetLayout = useDuet;
+    _cachedLyricPosition = position;
     _cachedDuetLinesRef = widget.lines;
     // 缓存 hasTimestamps 结果，避免每帧 O(N) 遍历
     _cachedHasTimestamps = widget.lines.any((l) => l.startTime > 0);
@@ -945,7 +970,12 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
     _cachedHasAnyWordTiming = widget.lines.any((l) => l.words.isNotEmpty);
     final result = DuetLayout.process(widget.lines, useDuet);
     _cleanedLines = result.cleanedLines;
-    _duetAlignments = result.alignments;
+    // 与「男女对唱优化」互斥：对唱开启时逐行性别/歌手对齐优先；
+    // 对唱关闭时所有行统一使用用户选择的全局水平位置。
+    _duetAlignments = useDuet
+        ? result.alignments
+        : List<DuetAlignment>.filled(
+            widget.lines.length, _duetAlignmentForPosition(position));
     // 失效行高缓存，让 _recomputeLineHeightsIfNeeded 用新的 _cleanedLines 重算
     _cachedLinesRef = null;
     // 歌词内容变化：旧行索引不再适用于新歌词，副行进度缓冲整体作废
@@ -4548,8 +4578,8 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         );
       for (final lineIndex in order) {
         final int blurLevel = levels[lineIndex]!;
-        // 检查缓存是否存在且渲染输入签名完全匹配（字号/缩放/视口/字体任一变化即过期）
-        final String signature = _blurCacheSignature(blurLevel);
+        // 检查缓存是否存在且渲染输入签名完全匹配（字号/缩放/视口/字体/对齐/文本任一变化即过期）
+        final String signature = _blurCacheSignature(lineIndex, blurLevel);
         final cached = _lineBlurImages[lineIndex];
         if (cached != null && cached.$2 == signature) continue;
         if (_lineBlurPending[lineIndex]?.$2 == signature) continue;
@@ -4622,7 +4652,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
   /// 发起单行主行模糊图烘焙（令牌 / 签名保护）。
   void _requestLineBlur(int lineIndex, int blurLevel) {
-    final String signature = _blurCacheSignature(blurLevel);
+    final String signature = _blurCacheSignature(lineIndex, blurLevel);
     final cached = _lineBlurImages[lineIndex];
     if (cached != null && cached.$2 == signature) return;
     if (_lineBlurPending[lineIndex]?.$2 == signature) return;
@@ -4643,7 +4673,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         return;
       }
       _lineBlurPending.remove(lineIndex);
-      if (_blurCacheSignature(blurLevel) != signature) {
+      if (_blurCacheSignature(lineIndex, blurLevel) != signature) {
         image?.dispose();
         return;
       }
@@ -4697,7 +4727,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
 
   /// 请求渲染某行的副行模糊图（令牌 / 签名过期保护与主行图完全同构）。
   void _requestAuxBlur(int lineIndex, int blurLevel) {
-    final String signature = _auxBlurCacheSignature(blurLevel);
+    final String signature = _auxBlurCacheSignature(lineIndex, blurLevel);
     final cached = _auxBlurImages[lineIndex];
     if (cached != null && cached.$2 == signature) return;
     if (_auxBlurPending[lineIndex]?.$2 == signature) return;
@@ -4713,7 +4743,7 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         return;
       }
       _auxBlurPending.remove(lineIndex);
-      if (_auxBlurCacheSignature(blurLevel) != signature) {
+      if (_auxBlurCacheSignature(lineIndex, blurLevel) != signature) {
         image?.dispose();
         return;
       }
@@ -5005,13 +5035,28 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
         '|${LyricPreferences.instance.displayMode.name}';
   }
 
-  /// 模糊图缓存签名 = 几何签名 + blurLevel（主行）。
-  String _blurCacheSignature(int blurLevel) =>
-      '${_blurGeometrySig()}|$blurLevel';
+  /// 主行模糊图缓存签名 = 几何签名 + 该行对齐 / 文本 + blurLevel。
+  ///
+  /// 对齐与文本必须进签名：切换「歌词位置」或「男女对唱」会改变同一行的
+  /// 绘制锚点、以及对唱前缀被剔除后的文本，旧图若继续复用会停留在旧对齐
+  /// 上（表现为文字偏移，甚至只看到半行）。
+  String _blurCacheSignature(int lineIndex, int blurLevel) {
+    final String text = lineIndex < _cleanedLines.length
+        ? _cleanedLines[lineIndex].text
+        : '';
+    return '${_blurGeometrySig()}|${_duetAlignmentAt(lineIndex).name}'
+        '|${text.length}:${text.hashCode}|$blurLevel';
+  }
 
   /// 副行模糊图缓存签名：与主行图隔离，避免两类图互相覆盖。
-  String _auxBlurCacheSignature(int blurLevel) =>
-      '${_blurGeometrySig()}|aux|$blurLevel';
+  /// 同样必须带对齐与副行文本指纹（切位置/翻译模式后要重烘焙）。
+  String _auxBlurCacheSignature(int lineIndex, int blurLevel) {
+    final String text = lineIndex < _auxWrapPlans.length
+        ? _auxWrapPlans[lineIndex].rowTexts.join('\n')
+        : '';
+    return '${_blurGeometrySig()}|${_duetAlignmentAt(lineIndex).name}'
+        '|aux|${text.length}:${text.hashCode}|$blurLevel';
+  }
 
   /// 异步渲染单行模糊图片。
   ///
@@ -5036,7 +5081,6 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       final double fontSize = geom.fontSize;
       final double renderHeight = geom.imageHeight;
       final double leftPadding = fontSize;
-      final double maxTextWidth = _viewportWidth - fontSize * 2;
 
       final recorder = ui.PictureRecorder();
       final canvas = Canvas(recorder);
@@ -5062,7 +5106,12 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
           fontWeight: LyricLayout.fontWeight,
         ),
       );
-      textPainter.layout(maxWidth: maxTextWidth);
+      // 断点唯一来源是换行计划：这里按自然宽度排版，不能再让 TextPainter
+      // 按 maxTextWidth 自行折行。计划按单元宽度累加，真实排版在个别字距/
+      // 字形下可能略宽；一旦多折出一行，该行会落到模糊图高度之外被裁掉
+      //（真机表现为「只显示半行」，居中/对唱时更明显）。
+      // 多行由 _paintBlurMultiLineAligned 按计划逐行重排，这里只需样式宿主。
+      textPainter.layout(maxWidth: double.infinity);
 
       // 对画布应用模糊
       final blurPaint = Paint()
@@ -5957,9 +6006,23 @@ class _LyricsPainter extends CustomPainter {
       final double dotSpacing =
           fontSize * LyricPreferences.instance.interludeDotSpacing;
       // 间奏点整体水平起点 = fontSize × 系数（默认 1.5：比歌词左对齐
-      // 右移 0.5em，让点整体居中偏右，视觉更平衡）
-      final double dotsStartX =
+      // 右移 0.5em，让点整体居中偏右，视觉更平衡）。
+      // 三点组：中心 = startX + dotSpacing + dotRadius，宽度 = 2×(dotSpacing + dotRadius)
+      // （见 InterludeDots.paintAtLineY）。居中/置右时按同一锚点重算：
+      // 居中 → 组中心落在视口中心；置右 → 组右缘与左对齐镜像（viewportWidth − 起点系数）。
+      // 对唱开启时 effectiveLyricPosition() 恒为置左，保持历史行为。
+      double dotsStartX =
           fontSize * LyricPreferences.instance.interludeDotsStartX;
+      final LyricPosition position = effectiveLyricPosition();
+      if (position == LyricPosition.center) {
+        dotsStartX = (viewportWidth / 2 - (dotSpacing + dotRadius))
+            .clamp(0.0, viewportWidth);
+      } else if (position == LyricPosition.right) {
+        dotsStartX = (viewportWidth -
+                fontSize * LyricPreferences.instance.interludeDotsStartX -
+                2 * (dotSpacing + dotRadius))
+            .clamp(0.0, viewportWidth);
+      }
       interludeDots.paintAtLineY(
         canvas,
         dotsStartX,

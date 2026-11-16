@@ -240,6 +240,8 @@ class _SettingsPageState extends State<SettingsPage>
   bool _lyricSoftEdge = false;
   bool _useFlowingBackground = false;
   bool _useDuetLayout = false;
+  // AM 歌词整体水平位置（默认置左）；与 _useDuetLayout 互斥。
+  LyricPosition _lyricPosition = LyricPosition.left;
   bool _lyricEcoMode = false;
   bool _lyricDynamicColor = false;
   // 当前行以上的行是否跟随已播颜色（独立开关，默认关闭）
@@ -1054,6 +1056,7 @@ class _SettingsPageState extends State<SettingsPage>
       _lyricSoftEdge = LyricPreferences.instance.softEdgeAntiAlias;
       _useFlowingBackground = LyricPreferences.instance.useFlowingBackground;
       _useDuetLayout = LyricPreferences.instance.useDuetLayout;
+      _lyricPosition = LyricPreferences.instance.lyricPosition;
       _lyricEcoMode = LyricPreferences.instance.ecoMode;
       _lyricDynamicColor = LyricPreferences.instance.useDynamicLyricColor;
       _lyricAboveLinesPlayedColor =
@@ -1607,7 +1610,7 @@ class _SettingsPageState extends State<SettingsPage>
         SettingsSubpage(
           title: '歌词效果',
           icon: Icons.auto_awesome_outlined,
-          description: '对唱优化、动态颜色、模糊、辉光与省电模式',
+          description: '对唱优化、歌词位置、动态颜色、模糊、辉光与省电模式',
           builder: _buildLyricEffectSubpage,
         ),
         // 音乐频谱：Android 走 PCM 截取 / Visualizer，Windows 走 WASAPI 环回采集
@@ -2588,6 +2591,14 @@ class _SettingsPageState extends State<SettingsPage>
     AppHaptics.lightImpact(HapticCategory.control);
     setState(() => _lyricAuxScope = scope);
     LyricPreferences.instance.setAuxScope(scope);
+  }
+
+  /// 写入 AM 歌词水平位置。对唱开启时下拉已禁用，这里只保留同值守卫。
+  void _selectLyricPosition(LyricPosition position) {
+    if (_lyricPosition == position) return;
+    AppHaptics.lightImpact(HapticCategory.control);
+    setState(() => _lyricPosition = position);
+    LyricPreferences.instance.setLyricPosition(position);
   }
 
   /// 自定义「歌词作者信息」过滤正则的弹层（参考 EchoMusic 过滤表达式设置）。
@@ -4438,6 +4449,56 @@ class _SettingsPageState extends State<SettingsPage>
                   LyricPreferences.instance.setUseDuetLayout(v);
                 }
               : null,
+        ),
+        // 歌词整体水平位置（仅 AM 播放页）。与「男女对唱歌词优化」互斥：
+        // 对唱开启时逐行对齐接管，下拉灰显禁用但保留已选值；关闭后恢复可用。
+        // M3E 字段式下拉：初始选中值由 M3EDropdownItem.selected 表达，
+        // 每次 build 按当前值重建 items；同值必须早退，避免
+        // setItems 回调 → setState → 重建 → setItems 无限回环。
+        // search: 歌词位置 对齐 置左 居中 置右 左对齐 右对齐 居中对齐 水平位置
+        ListTile(
+          title: const Text('歌词位置'),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _useDuetLayout
+                    ? '男女对唱优化已接管对齐（男左 / 女右 / 合居中）'
+                    : 'AM 歌词行的水平对齐方式',
+              ),
+              const Gap(AppSpacing.sm),
+              TvDropdownMenu<LyricPosition>(
+                enabled: _useAmStylePlayer && !_useDuetLayout,
+                items: [
+                  for (final position in LyricPosition.values)
+                    M3EDropdownItem(
+                      label: lyricPositionLabel(position),
+                      value: position,
+                      selected: _lyricPosition == position,
+                    ),
+                ],
+                singleSelect: true,
+                showChipAnimation: false,
+                fieldStyle: M3EDropdownFieldStyle(
+                  hintText: '选择歌词位置',
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md,
+                    vertical: AppSpacing.sm,
+                  ),
+                  selectedTextStyle: Theme.of(context).textTheme.bodyMedium,
+                ),
+                onSelectionChanged: (selected) {
+                  // 单选下再次点击已选中项会被取消选中：强制重建恢复原值
+                  if (selected.isEmpty) {
+                    setState(() {});
+                    return;
+                  }
+                  _selectLyricPosition(selected.first.value);
+                },
+              ),
+            ],
+          ),
         ),
         // 歌词动态字体颜色：当前行按「(1-比例) 白 + 比例 封面提取色」混色
         // （仅 AM 播放器；比例在「歌词动画」页调节）
