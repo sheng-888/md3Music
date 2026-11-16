@@ -4943,7 +4943,10 @@ class _AppleLyricsViewState extends State<AppleLyricsView>
       painter.paint(canvas, Offset(softPad, softPad));
       painter.dispose();
       final ui.Picture picture = recorder.endRecording();
-      final ui.Image image = await picture.toImage(
+      // 同 line_renderer 的整行烘焙：Impeller 上 toImage 要走 GPU→CPU 回读，
+      // 副行（翻译）图每换一行一张，回读开销与主行同量级。toImageSync 保留
+      // GPU 纹理，光栅化延迟到绘制，避免回读。
+      final ui.Image image = picture.toImageSync(
         ((logicalWidth + softPad * 2) * scale).ceil(),
         ((logicalHeight + softPad * 2) * scale).ceil(),
       );

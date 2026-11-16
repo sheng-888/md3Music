@@ -414,7 +414,12 @@ class LineRenderer {
       _staticX = _alignX(alignment, leftPadding, textW, viewportWidth);
       painter.paint(bakeCanvas, Offset(pad, pad));
       painter.dispose();
-      final ui.Image image = await recorder.endRecording().toImage(
+      // toImageSync 而非 toImage：Impeller 后端上 toImage 必须把光栅结果从 GPU
+      // 回读到 CPU（每次都是一次管线同步 + 双程拷贝），随后绘制时又要重新上传为
+      // 纹理。整行烘焙每换一行触发一次，回读代价直接表现为歌词滚动掉帧。
+      // toImageSync 保留为 GPU 纹理，光栅化延迟到首次绘制，全程不回读。
+      // 与项目自身 low_res_blur.dart 的用法一致（那里注释为「不引入异步帧」）。
+      final ui.Image image = recorder.endRecording().toImageSync(
         (logicalW * dpr).ceil().clamp(1, 8192),
         (logicalH * dpr).ceil().clamp(1, 8192),
       );
